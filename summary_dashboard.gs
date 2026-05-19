@@ -7,6 +7,13 @@
 var SALES_SHEET_NAME = '売上データ';
 var SUMMARY_SHEET_NAME = '月次サマリー';
 
+// デバッグログの出力を制御するフラグ（本番環境では false に設定する）
+var DEBUG_LOG = false;
+
+// 金額の有効範囲（0円以上・10億円以下）
+var AMOUNT_MIN = 0;
+var AMOUNT_MAX = 1000000000;
+
 /**
  * メイン処理：売上データを集計してサマリーシートに書き込み、グラフを更新する
  * 毎朝9時のトリガーから自動実行される
@@ -19,6 +26,8 @@ function updateSummaryDashboard() {
   // サマリーシートが存在しない場合は新規作成する
   if (!summarySheet) {
     summarySheet = ss.insertSheet(SUMMARY_SHEET_NAME);
+    // 誤編集を防ぐために編集保護を設定する（オーナーのみ編集可能）
+    summarySheet.protect().setDescription('月次サマリー - 自動集計シートのため編集禁止');
   }
 
   // 売上データを読み込む（1行目はヘッダーなのでスキップ）
@@ -49,12 +58,22 @@ function aggregateSalesByMonth(data) {
     // 日付と金額が空の行はスキップする
     if (!dateCell || amount === '') continue;
 
-    var date = new Date(dateCell);
+    // GASはDate型・文字列・数値（シリアル値）を返すことがあるため型に応じて変換する
+    var date;
+    if (dateCell instanceof Date) {
+      date = dateCell;
+    } else if (typeof dateCell === 'number') {
+      // Excelシリアル値（1900-01-01起算）をDateに変換する
+      date = new Date((dateCell - 25567) * 86400 * 1000);
+    } else {
+      date = new Date(dateCell);
+    }
     if (isNaN(date.getTime())) continue;
 
     var monthKey = date.getFullYear() + '年' + (date.getMonth() + 1) + '月';
     var numAmount = Number(amount);
-    if (isNaN(numAmount)) continue;
+    // 数値かつ有効な金額範囲（0円〜10億円）であることを確認する
+    if (isNaN(numAmount) || numAmount < AMOUNT_MIN || numAmount > AMOUNT_MAX) continue;
 
     if (monthlyMap.has(monthKey)) {
       var entry = monthlyMap.get(monthKey);
@@ -108,7 +127,10 @@ function writeSummary(sheet, monthlyMap) {
 function parseMonthKey(key) {
   var match = key.match(/(\d{4})年(\d{1,2})月/);
   if (!match) return 0;
-  return parseInt(match[1]) * 100 + parseInt(match[2]);
+  var month = parseInt(match[2]);
+  // 月が1〜12の範囲外の場合は不正なキーとして除外する
+  if (month < 1 || month > 12) return 0;
+  return parseInt(match[1]) * 100 + month;
 }
 
 /**
@@ -169,5 +191,8 @@ function setupDailyTrigger() {
     .everyDays(1)
     .create();
 
-  Logger.log('トリガーを登録しました：毎朝9時に ' + functionName + ' が実行されます');
+  // DEBUG_LOG が true のときのみログを出力する（本番環境では false に設定すること）
+  if (DEBUG_LOG) {
+    Logger.log('トリガーを登録しました：毎朝9時に ' + functionName + ' が実行されます');
+  }
 }
